@@ -1,107 +1,105 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
 from aiogram import Bot
-from aiogram.types import FSInputFile
 
+from config import BOT_TOKEN, BOSS_IDS
 from database.db import cursor
-from config import BOSS_IDS
 from services.statistics import get_statistics, format_statistics
 from services.pdf import generate_pdf
 from services.excel import generate_excel
 
+# 🇺🇿 O‘zbekiston vaqti
+scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
 
-def setup_scheduler(bot: Bot):
-    """
-    Scheduler faqat app.py dan chaqiriladi
-    """
-    scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
+bot = Bot(BOT_TOKEN)
 
-    # =============================
-    # 📆 KUNLIK STATISTIKA (23:59)
-    # =============================
-    async def daily_report():
-        today = datetime.now().strftime("%Y-%m-%d")
 
-        # 👑 Boss
-        cursor.execute("SELECT id FROM users")
-        all_user_ids = [r[0] for r in cursor.fetchall()]
+# ==============================
+# 📊 KUNLIK HISOBOT (23:59)
+# ==============================
+async def daily_report():
+    today = datetime.now().strftime("%Y-%m-%d")
 
-        stats = get_statistics(all_user_ids, today, today)
+    # 👑 Boss
+    cursor.execute("SELECT id FROM users")
+    all_user_ids = [r[0] for r in cursor.fetchall()]
+
+    stats = get_statistics(all_user_ids, today, today)
+    text = format_statistics(stats, today, today)
+
+    for boss_id in BOSS_IDS:
+        await bot.send_message(boss_id, text)
+
+    # 👤 Menejerlar
+    cursor.execute("SELECT id, telegram_id FROM users WHERE role='manager'")
+    managers = cursor.fetchall()
+
+    for manager_id, tg_id in managers:
+        cursor.execute(
+            "SELECT id FROM users WHERE parent_id=? AND role='admin'",
+            (manager_id,)
+        )
+        admin_ids = [r[0] for r in cursor.fetchall()]
+        user_ids = admin_ids + [manager_id]
+
+        stats = get_statistics(user_ids, today, today)
         text = format_statistics(stats, today, today)
 
-        for boss_id in BOSS_IDS:
-            await bot.send_message(boss_id, text)
+        await bot.send_message(tg_id, text)
 
-        # 👤 Menejerlar
-        cursor.execute("SELECT id, telegram_id FROM users WHERE role='manager'")
-        managers = cursor.fetchall()
 
-        for manager_id, tg_id in managers:
-            cursor.execute(
-                "SELECT id FROM users WHERE parent_id=? AND role='admin'",
-                (manager_id,)
-            )
-            admin_ids = [r[0] for r in cursor.fetchall()]
-            user_ids = admin_ids + [manager_id]
+# ==============================
+# 📄 HAFTALIK PDF (DUSHANBA)
+# ==============================
+async def weekly_pdf():
+    today = datetime.now()
+    start = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
 
-            stats = get_statistics(user_ids, today, today)
-            text = format_statistics(stats, today, today)
+    # 👑 Boss
+    cursor.execute("SELECT id FROM users")
+    user_ids = [r[0] for r in cursor.fetchall()]
 
-            await bot.send_message(tg_id, text)
+    pdf_path = generate_pdf(user_ids, start, end, "weekly_boss.pdf")
 
-    # =============================
-    # 📆 HAFTALIK PDF (DUSHANBA)
-    # =============================
-    async def weekly_pdf():
-        today = datetime.now()
-        start = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+    for boss_id in BOSS_IDS:
+        await bot.send_document(boss_id, pdf_path)
 
-        # 👑 Boss
-        cursor.execute("SELECT id FROM users")
-        user_ids = [r[0] for r in cursor.fetchall()]
+    # 👤 Menejerlar
+    cursor.execute("SELECT id, telegram_id FROM users WHERE role='manager'")
+    managers = cursor.fetchall()
 
-        pdf_path = generate_pdf(user_ids, start, end, "weekly_boss.pdf")
+    for manager_id, tg_id in managers:
+        cursor.execute(
+            "SELECT id FROM users WHERE parent_id=? AND role='admin'",
+            (manager_id,)
+        )
+        admin_ids = [r[0] for r in cursor.fetchall()]
+        ids = admin_ids + [manager_id]
 
-        for boss_id in BOSS_IDS:
-            await bot.send_document(boss_id, FSInputFile(pdf_path))
+        pdf_path = generate_pdf(
+            ids,
+            start,
+            end,
+            f"weekly_manager_{manager_id}.pdf"
+        )
+        await bot.send_document(tg_id, pdf_path)
 
-        # 👤 Menejerlar
-        cursor.execute("SELECT id, telegram_id FROM users WHERE role='manager'")
-        managers = cursor.fetchall()
 
-        for manager_id, tg_id in managers:
-            cursor.execute(
-                "SELECT id FROM users WHERE parent_id=? AND role='admin'",
-                (manager_id,)
-            )
-            admin_ids = [r[0] for r in cursor.fetchall()]
-            ids = admin_ids + [manager_id]
+# ==============================
+# 📊 OYLIK PDF + EXCEL (28-kuni)
+# ==============================
+async def monthly_report():
+    today = datetime.now()
+    start = today.replace(day=1).strftime("%Y-%m-%d")
+    end = today.strftime("%Y-%m-%d")
 
-            pdf = generate_pdf(ids, start, end, f"weekly_manager_{manager_id}.pdf")
-            await bot.send_document(tg_id, FSInputFile(pdf))
+    cursor.execute("SELECT id FROM users")
+    user_ids = [r[0] for r in cursor.fetchall()]
 
-    # =============================
-    # 📆 OYLIK PDF + EXCEL (OY OXIRI)
-    # =============================
-    async def monthly_report():
-        today = datetime.now()
-        start = today.replace(day=1).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+    pdf_path = generate_pdf(user_ids, start, end, "month_boss.pdf")
+    excel_path = generate_excel(user_ids, start, end, "month_boss.xlsx")
 
-        cursor.execute("SELECT id FROM users")
-        user_ids = [r[0] for r in cursor.fetchall()]
-
-        pdf = generate_pdf(user_ids, start, end, "month_boss.pdf")
-        excel = generate_excel(user_ids, start, end, "month_boss.xlsx")
-
-        for boss_id in BOSS_IDS:
-            await bot.send_document(boss_id, FSInputFile(pdf))
-            await bot.send_document(boss_id, FSInputFile(excel))
-
-    # ===== JOBLAR =====
-    scheduler.add_job(daily_report, "cron", hour=23, minute=59)
-    scheduler.add_job(weekly_pdf, "cron", day_of_week="mon", hour=9, minute=0)
-    scheduler.add_job(monthly_report, "cron", day=28, hour=9, minute=0)
-
-    scheduler.start()
+    for boss_id in BOSS_IDS:
+        await bot.send_document(boss_id, pdf_path)
+        await bot.send_document(boss_id, excel_path)

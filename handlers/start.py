@@ -1,9 +1,9 @@
 from aiogram import Router
 from aiogram.types import Message
+from aiogram.filters import Command
 
-from database.db import cursor, commit
 from config import BOSS_IDS
-
+from database.db import cursor
 from keyboards.boss import boss_menu
 from keyboards.manager import manager_menu
 from keyboards.admin import admin_menu
@@ -11,54 +11,25 @@ from keyboards.admin import admin_menu
 router = Router()
 
 
-@router.message()
-async def start_handler(message: Message):
-    if message.text != "/start":
+@router.message(Command("start"))
+async def start_cmd(message: Message):
+    user_id = message.from_user.id
+
+    if user_id in BOSS_IDS:
+        await message.answer("👑 Boss panel", reply_markup=boss_menu())
         return
 
-    tg_id = message.from_user.id
-    full_name = message.from_user.full_name
-
-    # 👑 Boss
-    if tg_id in BOSS_IDS:
-        await message.answer(
-            f"👑 Xush kelibsiz, Boss {full_name}",
-            reply_markup=boss_menu()
-        )
-        return
-
-    # DB da bormi?
     cursor.execute(
         "SELECT role FROM users WHERE telegram_id=?",
-        (tg_id,)
+        (user_id,)
     )
-    user = cursor.fetchone()
+    row = cursor.fetchone()
 
-    # ❗ Agar DB da yo‘q bo‘lsa — hozircha hech narsa qilmaymiz
-    if not user:
-        await message.answer(
-            "❌ Siz tizimga biriktirilmagansiz.\n"
-            "Administrator bilan bog‘laning."
-        )
+    if not row:
+        await message.answer("❌ Siz tizimda yo‘qsiz")
         return
 
-    role = user[0]
-
-    # 👤 Manager
-    if role == "manager":
-        await message.answer(
-            f"👤 Xush kelibsiz, Menejer {full_name}",
-            reply_markup=manager_menu()
-        )
-        return
-
-    # 👤 Admin
-    if role == "admin":
-        await message.answer(
-            f"👤 Xush kelibsiz, Admin {full_name}",
-            reply_markup=admin_menu()
-        )
-        return
-
-    # fallback
-    await message.answer("❌ Rol aniqlanmadi")
+    if row[0] == "manager":
+        await message.answer("👤 Menejer panel", reply_markup=manager_menu())
+    elif row[0] == "admin":
+        await message.answer("🛡 Admin panel", reply_markup=admin_menu())
